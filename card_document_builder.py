@@ -26,6 +26,22 @@ from typing import Any, Dict, Iterable, List, Optional
 from document_builder.tags import TAG_RULES, TYPE_WORDS
 
 
+# helpers for evolution + normalization
+_STAGE_TIER = {
+    "basic": 0, "stage 1": 1, "stage1": 1, "stage-1": 1,
+    "stage 2": 2, "stage2": 2, "stage-2": 2,
+}
+
+def _norm_name(s: str | None) -> str:
+    if not s:
+        return ""
+    return re.sub(r"\s+", " ", s).strip()
+
+def _slug(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
 
 def _join_list(values: Any) -> str:
     return " | ".join(map(str, values)) if isinstance(values, list) else str(values)
@@ -110,12 +126,15 @@ class CardDocumentBuilder:
         return StoredDoc(doc_id=str(uuid.uuid4()), text=text, metadata=meta)
 
     def _pokemon_to_doc(self, card: Dict[str, Any], expansion: str) -> StoredDoc:
-        name = (card.get("name") or "UNKNOWN").strip()
+        name = _norm_name(card.get("name") or "UNKNOWN")
         types = card.get("types") or []
+        stage = _norm_name(card.get("stage"))
+        evolves_from = _norm_name(card.get("evolves_from"))
+        stage_tier = _STAGE_TIER.get(stage.lower(), None)
 
         lines: List[str] = [
             f"card: {name}",
-            f"type: pokemon",
+            "type: pokemon",
             f"expansion: {expansion}",
         ]
         for k in ("stage", "hp", "retreat", "evolves_from", "weakness"):
@@ -146,14 +165,26 @@ class CardDocumentBuilder:
                 attacks_text.append(str(atk["effect"]))
 
         text = "\n".join(lines)
-        tags = extract_synergy_tags("\n".join(abilities_text + attacks_text), types) if self.compute_synergy_tags else []
+        tags = extract_synergy_tags("\n".join(abilities_text + attacks_text),
+                                    types) if self.compute_synergy_tags else []
 
+        # >>> NEW evolution-aware metadata
+        evolution_base = card.get("_evolution_base") or name
+        has_children = bool(card.get("_has_children"))
         meta = {
             "doc_type": "card",
             "card_type": "pokemon",
             "name": name,
+            "name_slug": _slug(name),
             "expansion": expansion,
             "types": types,
+            "stage": stage,
+            "stage_tier": stage_tier,
+            "evolves_from": evolves_from,  # <-- add this
+            "evolves_from_slug": _slug(evolves_from) if evolves_from else "",
+            "evolution_base": evolution_base,  # <-- base of the chain
+            "evolution_base_slug": _slug(evolution_base),
+            "has_evolutions": has_children,  # <-- parent has children
             "synergy_tags": tags,
         }
         return StoredDoc(doc_id=str(uuid.uuid4()), text=text, metadata=meta)
@@ -181,11 +212,49 @@ class CardDocumentBuilder:
 
     def _expansion_to_docs(self, expansion_json: Dict[str, Any], expansion_name: str) -> List[StoredDoc]:
         docs: List[StoredDoc] = []
-        for p in expansion_json.get("pokemon") or []:
+        pokemon_list = expansion_json.get("pokemon") or []
+
+        # Map: normalized card name -> raw card dict
+        name_map = {_norm_name(p.get("name")): p for p in pokemon_list if p.get("name")}
+
+        # Compute base for each pokemon by walking evolves_from up the chain
+        def _find_base(n: str) -> str:
+            seen = set()
+            cur = n
+            while cur and cur not in seen:
+                seen.add(cur)
+                card = name_map.get(cur)
+                if not card:
+                    break
+                parent = _norm_name(card.get("evolves_from"))
+                if not parent:
+                    return cur
+                cur = parent
+            return n  # fallback
+
+        # Which mons have children?
+        has_children: set[str] = set()
+        for p in pokemon_list:
+            parent = _norm_name(p.get("evolves_from"))
+            if parent:
+                has_children.add(parent)
+
+        # Build docs with enriched metadata
+        for p in pokemon_list:
+            nm = _norm_name(p.get("name"))
+            base = _find_base(nm)
+            # pass hints to _pokemon_to_doc via extra fields on the card
+            p = dict(p)  # shallow copy
+            p["_norm_name"] = nm
+            p["_evolution_base"] = base
+            p["_has_children"] = (nm in has_children)
             docs.append(self._pokemon_to_doc(p, expansion_name))
+
+        # supporters/items/tools
         for sec in ("supporters", "items", "tools"):
-            for c in expansion_json.get(sec) or []:
+            for c in (expansion_json.get(sec) or []):
                 docs.append(self._named_effect_to_doc(c, expansion_name, sec))
+
         return docs
 
     # --------------------

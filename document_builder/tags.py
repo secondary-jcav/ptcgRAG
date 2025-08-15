@@ -5,16 +5,16 @@ from typing import List
 # -----------------------------
 
 TAG_RULES: List[tuple[str, str]] = [
-    (r"\b(search|look up|reveal) (your )?(deck|discard)", "tutor"),
-    (r"\bdraw\b|\bdraw [0-9]+ cards?", "draw"),
-    (r"\battach (an? )?energy|extra energy|more energy|accelerat(e|ion)\b", "energy_accel"),
-    (r"\b(heal|remove) (damage|damage counters?)\b", "heal"),
-    (r"\b(switch|swap) (your )?(active|benched)\b", "switch"),
-    (r"\b(retreat cost|reduce retreat)\b", "retreat_reduction"),
-    (r"\bdiscard (a|an|any|up to|from)\b", "discard"),
-    (r"\b(search|attach) (a )?tool\b|pokemon tool", "tool_synergy"),
+    (r"\b(search|look up|reveal)\s+(your\s+)?(deck|discard)\b", "tutor"),
+    (r"\bdraw\b|\bdraw\s+\d+\s+cards?\b", "draw"),
+    (r"\battach\s+(an?\s+)?energy\b|\bextra\s+energy\b|\bmore\s+energy\b|\baccelerat(?:e|ion)\b", "energy_accel"),
+    (r"\b(heal|remove)\s+(damage|damage\s+counters?)\b", "heal"),
+    (r"\b(switch|swap)\s+(your\s+)?(active|benched)\b", "switch"),
+    (r"\b(retreat\s+cost|reduce\s+retreat)\b", "retreat_reduction"),
+    (r"\bdiscard\s+(a|an|any|up\s+to|from)\b", "discard"),
+    (r"\b(search|attach)\s+(a\s+)?tool\b|\bpokemon\s+tool\b", "tool_synergy"),
     (r"\b(evolve|evolution)\b", "evolution"),
-    (r"\bresist(s|ance)?|weakness\b", "type_matchup"),
+    (r"\bresist(s|ance)?\b|\bweakness\b", "type_matchup"),
 ]
 
 TYPE_WORDS = {

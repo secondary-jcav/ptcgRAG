@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 synergy_query.py (LlamaIndex 0.13.1 compatible)
 ----------------------------------------------
@@ -8,11 +9,11 @@ Query helpers for "find synergies" using a VectorStoreIndex.
 """
 import json
 from typing import List, Optional, Callable
+
 try:
     from pydantic import PrivateAttr  # works for Pydantic v1 & v2
 except Exception:  # pragma: no cover
     PrivateAttr = None
-
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import VectorIndexRetriever
@@ -39,54 +40,38 @@ except Exception:  # pragma: no cover
                     return fn(nodes, query_bundle=query_bundle)
                 return nodes
 
-
 DEFAULT_SYSTEM_PROMPT = (
     "You are a competitive deck builder. Given card snippets and (optionally) rules/guide snippets, "
     "recommend synergistic cards across pokemon, supporters, items, and tools. "
+    "Stick to the rules and take advantage of any tips in the deckbuilding guide"
+    "Only ue the cards you see in the index"
     "Favor energy acceleration, tutoring, draw, switching, and type synergies. "
     "Always explain briefly *why* each pick helps, and cite with 'Card Name (Expansion)'. "
 )
 
+
 # replace your _LambdaPostprocessor with this version
+
 class _LambdaPostprocessor(BaseNodePostprocessor):
-    # Pydantic-safe storage for the callable
-    if PrivateAttr is not None:
-        _fn: Callable[[List[NodeWithScore]], List[NodeWithScore]] = PrivateAttr(default=None)
+    _fn: Callable[[List[NodeWithScore]], List[NodeWithScore]] = PrivateAttr(default=None)
 
     def __init__(self, fn: Callable[[List[NodeWithScore]], List[NodeWithScore]]):
-        # Important: initialize the BaseModel first so internal state is set up
-        try:
-            super().__init__()  # BaseNodePostprocessor is a Pydantic BaseModel in 0.13.x
-        except TypeError:
-            # fallback in case the base isn't a model or requires args in older versions
-            try:
-                super().__init__(**{})  # no-op, avoids passing unknown fields
-            except Exception:
-                pass
+        super().__init__()
+        if not callable(fn):
+            raise ValueError("LambdaPostprocessor requires a callable fn(nodes)->nodes")
+        self._fn = fn
 
-        # Assign the function in a way that's compatible with Pydantic models
-        if PrivateAttr is not None:
-            self._fn = fn
-        else:
-            # Non-Pydantic fallback (e.g., if you're using the stub/older versions)
-            self._fn = fn
-
-    # REQUIRED by 0.13.x abstract interface
+    # 0.13.1 requires this underscored hook
     def _postprocess_nodes(self, nodes: List[NodeWithScore], query_bundle=None) -> List[NodeWithScore]:
         return self._fn(nodes)
 
-    # Keep for cross-version compatibility
-    def postprocess_nodes(self, nodes: List[NodeWithScore], query_bundle=None) -> List[NodeWithScore]:
-        return self._fn(nodes)
-
-
 class SynergyQueryEngine:
     def __init__(
-        self,
-        index: VectorStoreIndex,
-        similarity_top_k: int = 8,
-        node_postprocessor: Optional[Callable[[List[NodeWithScore]], List[NodeWithScore]]] = None,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+            self,
+            index: VectorStoreIndex,
+            similarity_top_k: int = 8,
+            node_postprocessor: Optional[Callable[[List[NodeWithScore]], List[NodeWithScore]]] = None,
+            system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ) -> None:
         self.index = index
         self.similarity_top_k = similarity_top_k
@@ -95,16 +80,15 @@ class SynergyQueryEngine:
 
     def _make_engine(self, k: Optional[int] = None, postproc: Optional[Callable] = None) -> RetrieverQueryEngine:
         retriever = VectorIndexRetriever(index=self.index, similarity_top_k=k or self.similarity_top_k)
-        synth = get_response_synthesizer()  # default settings
+        synth = get_response_synthesizer()
         node_postprocessors = []
-        if postproc is not None:
+        if callable(postproc):  # <-- only wrap if callable
             node_postprocessors = [_LambdaPostprocessor(postproc)]
-        engine = RetrieverQueryEngine(
+        return RetrieverQueryEngine(
             retriever=retriever,
             response_synthesizer=synth,
             node_postprocessors=node_postprocessors,
         )
-        return engine
 
     def _default_post_filter(self, target_name: str, expansion: Optional[str], include_cross_expansions: bool):
         def _filter(nodes: List[NodeWithScore]) -> List[NodeWithScore]:
@@ -124,14 +108,15 @@ class SynergyQueryEngine:
                         continue
                 out.append(n)
             return out
+
         return _filter
 
     def find_synergies(
-        self,
-        target_card_name: str,
-        expansion: Optional[str] = None,
-        include_cross_expansions: bool = True,
-        k: Optional[int] = None,
+            self,
+            target_card_name: str,
+            expansion: Optional[str] = None,
+            include_cross_expansions: bool = True,
+            k: Optional[int] = None,
     ) -> str:
         """
         Return a natural-language answer with recommended synergies.
@@ -158,15 +143,15 @@ class SynergyQueryEngine:
         types_text = ", ".join(types) if types else ""
 
         user_query = (
-            f"Suggest cards that synergize with {target_card_name}"
-            + (f" (types: {types_text})" if types_text else "")
-            + (f" using themes: {tag_text}" if tag_text else "")
-            + ". Explain why each pick helps a competitive deck."
+                f"Suggest cards that synergize with {target_card_name}"
+                + (f" (types: {types_text})" if types_text else "")
+                + (f" using themes: {tag_text}" if tag_text else "")
+                + ". Explain why each pick helps a competitive deck."
         )
 
-        postproc = self.node_postprocessor or self._default_post_filter(
-            target_card_name, expansion, include_cross_expansions
-        )
+        postproc = self.node_postprocessor or self._default_post_filter(target_card_name, expansion,
+                                                                        include_cross_expansions)
+
         engine = self._make_engine(k=k, postproc=postproc)
         result = engine.query(f"{self.system_prompt}\n\nUSER QUERY: {user_query}")
         return str(result)
